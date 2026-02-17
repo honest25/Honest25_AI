@@ -1,110 +1,129 @@
-export const config = {
-  maxDuration: 60, // Allow time for fallbacks without Vercel killing the function
-};
+export const config = { maxDuration: 60 };
 
 export default async function handler(req, res) {
-  if (req.method !== 'POST') return res.status(405).send('Use POST');
-  const { messages } = await req.json(); // Full history for context
-  const lastQuery = messages[messages.length - 1].content;
-
-  // 1. Enhanced DuckDuckGo Search (More context for better answers)
-  const searchRes = await fetch(`https://api.duckduckgo.com/?q=${encodeURIComponent(lastQuery)}&format=json&no_html=1`);
-  const searchData = await searchRes.json();
-  let context = searchData.AbstractText || '';
-  if (searchData.RelatedTopics && searchData.RelatedTopics.length > 0) {
-    context += '\nRelated: ' + searchData.RelatedTopics.slice(0, 2).map(t => t.Text).join('; ');
+  if (req.method !== 'POST') {
+    res.status(405).json({ error: 'Method Not Allowed' });
+    return;
   }
-  context = context || 'Using general knowledge.';
 
-  // 2. Tiered Model Stack (Your full list, ordered for speed)
+  const { messages } = await req.json();
+  const query = messages[messages.length - 1].content;
+
+  // DuckDuckGo context (kept simple)
+  let context = 'Using general knowledge.';
+  try {
+    const search = await fetch(`https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1`);
+    const data = await search.json();
+    context = data.AbstractText || context;
+  } catch {}
+
+  // Your tiered models
   const modelStack = [
-    // FAST MODELS (First Try)
+    // FAST
     'stepfun/step-3.5-flash:free',
     'nvidia/nemotron-nano-9b-v2:free',
     'google/gemma-3-4b-it:free',
     'meta-llama/llama-3.2-3b-instruct:free',
     'qwen/qwen3-4b:free',
-    // BALANCED MODELS (Fallback)
+    // BALANCED
     'google/gemma-3-12b-it:free',
     'mistralai/mistral-small-3.1-24b-instruct:free',
     'z-ai/glm-4.5-air:free',
     'upstage/solar-pro-3:free',
     'nvidia/nemotron-3-nano-30b-a3b:free',
-    // HEAVY / THINKING MODELS (Final Fallback)
+    // HEAVY
     'deepseek/deepseek-r1-0528:free',
     'meta-llama/llama-3.3-70b-instruct:free',
     'nousresearch/hermes-3-llama-3.1-405b:free',
     'qwen/qwen3-next-80b-a3b-instruct:free',
     'openai/gpt-oss-120b:free',
-    'arcee-ai/trinity-large-preview:free',
-    'openai/gpt-oss-20b:free',
-    'qwen/qwen3-coder:free',
-    'google/gemma-3-27b-it:free',
-    'liquid/lfm-2.5-1.2b-instruct:free',
-    'liquid/lfm-2.5-1.2b-thinking:free',
-    'google/gemma-3n-e2b-it:free',
-    'google/gemma-3n-e4b-it:free',
-    'nvidia/nemotron-nano-12b-v2-vl:free',
-    'arcee-ai/trinity-mini:free',
-    'openrouter/free'
   ];
 
-  // 3. Fallback Loop with Timeout (Guarantees natural, quick jumps)
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
-    'Connection': 'keep-alive',
-  });
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
 
-  let replied = false;
+  let modelUsed = null;
+  let hasReplied = false;
+
   for (const model of modelStack) {
+    if (hasReplied) break;
+
+    res.write(`data: {"status":"Trying ${model.split('/').pop().replace(':free','')}..."}\n\n`);
+
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 3000); // 3s max per attempt
-      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      const timeout = setTimeout(() => controller.abort(), 3200); // 3.2s max wait for first token
+
+      const apiRes = await fetch('https://openrouter.ai/api/v1/chat/completions', {
         method: 'POST',
         signal: controller.signal,
         headers: {
           'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
           'Content-Type': 'application/json',
+          'HTTP-Referer': 'https://your-vercel-domain.vercel.app', // optional but good
           'X-Title': 'Honest25-AI',
         },
         body: JSON.stringify({
-          model: model,
+          model,
           messages: [
-            { role: 'system', content: `You are Honest25-AI. Use this context: ${context}. Be helpful and concise.` },
+            { role: 'system', content: `You are Honest25-AI. Use context if helpful: ${context}. Be direct and friendly.` },
             ...messages,
           ],
-          stream: true, // Stream for real-time typing
+          stream: true,
+          temperature: 0.7,
         }),
       });
-      clearTimeout(timeoutId);
 
-      // Stream the response
-      const reader = response.body.getReader();
+      clearTimeout(timeout);
+
+      if (!apiRes.ok) throw new Error(`HTTP ${apiRes.status}`);
+
+      const reader = apiRes.body.getReader();
+      const decoder = new TextDecoder();
+
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        const chunk = new TextDecoder().decode(value);
-        const lines = chunk.split('\n').filter(line => line.startsWith('data: '));
+
+        const chunk = decoder.decode(value);
+        const lines = chunk.split('\n');
+
         for (const line of lines) {
-          const json = JSON.parse(line.slice(6));
-          if (json.choices[0].delta.content) {
-            res.write(`data: ${JSON.stringify({ content: json.choices[0].delta.content })}\n\n`);
+          if (line.startsWith('data: ')) {
+            const dataStr = line.slice(6).trim();
+            if (dataStr === '[DONE]') continue;
+
+            try {
+              const parsed = JSON.parse(dataStr);
+              const delta = parsed.choices?.[0]?.delta?.content;
+              if (delta) {
+                res.write(`data: ${JSON.stringify({ content: delta })}\n\n`);
+                hasReplied = true;
+              }
+            } catch {}
           }
         }
       }
-      replied = true;
-      res.write(`data: ${JSON.stringify({ done: true, modelUsed: model })}\n\n`);
-      break; // Success, stop loop
-    } catch (e) {
-      console.log(`Fallback: ${model} timed out or failed. Trying next...`);
-      continue; // Jump to next model naturally
+
+      if (hasReplied) {
+        modelUsed = model;
+        res.write(`data: ${JSON.stringify({ done: true, modelUsed })}\n\n`);
+      }
+
+    } catch (err) {
+      // Timeout or error → log & continue to next model
+      console.log(`Model ${model} failed: ${err.message}`);
+      if (!hasReplied) {
+        res.write(`data: {"status":"${model} slow – jumping to next..."}\n\n`);
+      }
+      continue;
     }
   }
 
-  if (!replied) {
-    res.write(`data: ${JSON.stringify({ content: 'All models busy. Please retry.' })}\n\n`);
+  if (!hasReplied) {
+    res.write(`data: ${JSON.stringify({ content: 'Sorry, all models are slow right now. Try again in a minute.' })}\n\n`);
   }
+
   res.end();
 }
