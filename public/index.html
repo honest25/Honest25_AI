@@ -1,50 +1,50 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-    <meta charset="UTF-8">
-    <title>Honest25-AI | Search</title>
+    <title>Honest25-AI</title>
     <script src="https://cdn.tailwindcss.com"></script>
 </head>
-<body class="bg-black text-white font-sans p-6">
-    <div class="max-w-2xl mx-auto">
-        <header class="flex justify-between items-center mb-10">
-            <h1 class="text-2xl font-bold tracking-tighter text-blue-500">HONEST25 AI</h1>
-            <span class="text-xs bg-zinc-800 px-2 py-1 rounded">MULTI-MODEL FALLBACK ACTIVE</span>
-        </header>
+<body class="bg-black text-zinc-200">
+    <div class="max-w-3xl mx-auto p-6">
+        <div class="flex items-center justify-between border-b border-zinc-800 pb-4 mb-6">
+            <h1 class="text-xl font-black text-blue-500">HONEST25-AI</h1>
+            <div id="loader" class="hidden text-xs text-yellow-500 animate-pulse">MODEL FALLBACK ACTIVE...</div>
+        </div>
 
-        <div id="chat" class="space-y-6 min-h-[400px] mb-6 overflow-y-auto"></div>
+        <div id="chat-display" class="space-y-4 mb-24"></div>
 
-        <div class="fixed bottom-10 left-0 right-0 px-6">
-            <div class="max-w-2xl mx-auto relative">
-                <input id="input" type="text" placeholder="Ask Honest25-AI anything..." 
-                       class="w-full p-4 bg-zinc-900 border border-zinc-800 rounded-2xl focus:border-blue-600 outline-none">
-                <button onclick="ask()" class="absolute right-3 top-3 bg-blue-600 px-4 py-1.5 rounded-xl font-bold">GO</button>
+        <div class="fixed bottom-0 left-0 w-full bg-black/80 backdrop-blur-md p-6">
+            <div class="max-w-3xl mx-auto flex gap-2">
+                <input id="prompt" class="flex-1 bg-zinc-900 border border-zinc-800 p-3 rounded-lg outline-none focus:border-blue-500" placeholder="Ask anything...">
+                <button onclick="runHonest()" class="bg-blue-600 px-6 py-2 rounded-lg font-bold">SEND</button>
             </div>
-            <p id="status" class="text-center text-[10px] text-zinc-600 mt-2 uppercase tracking-widest"></p>
+            <p id="info" class="text-[10px] text-zinc-600 mt-2 text-center"></p>
         </div>
     </div>
 
     <script>
-        async function ask() {
-            const input = document.getElementById('input');
-            const chat = document.getElementById('chat');
-            const status = document.getElementById('status');
-            const query = input.value;
-            if(!query) return;
+        async function runHonest() {
+            const p = document.getElementById('prompt');
+            const d = document.getElementById('chat-display');
+            const l = document.getElementById('loader');
+            const info = document.getElementById('info');
+            
+            if(!p.value) return;
+            const query = p.value;
+            p.value = '';
+            l.classList.remove('hidden');
 
-            chat.innerHTML += `<div class="text-zinc-400 text-sm">Query: ${query}</div>`;
-            input.value = '';
-            status.innerText = "Finding fastest model...";
+            d.innerHTML += `<div class="text-white font-bold mt-4">User: ${query}</div>`;
 
             const res = await fetch('/api/chat', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ messages: [{ role: 'user', content: query }] })
+                body: JSON.stringify({ messages: [{role:'user', content: query}] })
             });
 
             const data = await res.json();
-            status.innerText = `Connected via: ${data.modelUsed}`;
-            chat.innerHTML += `<div class="bg-zinc-900 p-4 rounded-2xl border border-zinc-800">${data.reply}</div>`;
+            l.classList.add('hidden');
+            info.innerText = "Model used: " + (data.modelUsed || "None");
+            d.innerHTML += `<div class="bg-zinc-900 p-4 rounded-xl border border-zinc-800"><b>Honest25-AI:</b><br>${data.reply}</div>`;
             window.scrollTo(0, document.body.scrollHeight);
         }
     </script>
