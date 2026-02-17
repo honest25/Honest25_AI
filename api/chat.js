@@ -1,122 +1,96 @@
-export const config = {
-  maxDuration: 30,
-};
+const express = require("express");
+const cors = require("cors");
+const { v4: uuidv4 } = require("uuid");
 
-const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
+const app = express();
+app.use(cors());
+app.use(express.json());
 
-async function callModel(model, messages, context) {
-  const controller = new AbortController();
+let sessions = {}; // session-based memory
 
-  const timeout = setTimeout(() => controller.abort(), 8000); // 8s hard limit
-
-  try {
-    const response = await fetch(OPENROUTER_URL, {
-      method: "POST",
-      signal: controller.signal,
-      headers: {
-        "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
-        "Content-Type": "application/json",
-        "X-Title": "Honest25-AI"
-      },
-      body: JSON.stringify({
-        model,
-        temperature: 0.7,
-        messages: [
-          { role: "system", content: `You are Honest25-AI. Use this context: ${context}` },
-          ...messages
-        ]
-      })
-    });
-
-    clearTimeout(timeout);
-
-    const data = await response.json();
-
-    if (data.choices && data.choices[0]) {
-      return {
-        reply: data.choices[0].message.content,
-        modelUsed: model
-      };
-    }
-
-    throw new Error("Invalid response");
-  } catch (err) {
-    clearTimeout(timeout);
-    throw err;
-  }
-}
-
-export default async function handler(req, res) {
-  if (req.method !== "POST") {
-    return res.status(405).send("POST only");
-  }
-
-  const { messages } = req.body;
-  const lastQuery = messages[messages.length - 1].content;
-
-  // DuckDuckGo Context
-  let context = "";
-  try {
-    const search = await fetch(
-      `https://api.duckduckgo.com/?q=${encodeURIComponent(lastQuery)}&format=json&no_html=1`
-    );
-    const sData = await search.json();
-    context = sData.AbstractText || "General knowledge mode";
-  } catch {
-    context = "Search unavailable";
-  }
-
-  // FAST (Race)
-  const fastModels = [
-    "stepfun/step-3.5-flash:free",
-    "nvidia/nemotron-nano-9b-v2:free",
-    "google/gemma-3-4b-it:free",
-    "meta-llama/llama-3.2-3b-instruct:free",
-    "qwen/qwen3-4b:free"
-  ];
-
-  try {
-    const fast = await Promise.any(
-      fastModels.map(m => callModel(m, messages, context))
-    );
-    return res.status(200).json(fast);
-  } catch {}
-
-  // BALANCED (Race)
-  const balancedModels = [
-    "google/gemma-3-12b-it:free",
-    "mistralai/mistral-small-3.1-24b-instruct:free",
-    "z-ai/glm-4.5-air:free",
-    "upstage/solar-pro-3:free",
-    "nvidia/nemotron-3-nano-30b-a3b:free"
-  ];
-
-  try {
-    const balanced = await Promise.any(
-      balancedModels.map(m => callModel(m, messages, context))
-    );
-    return res.status(200).json(balanced);
-  } catch {}
-
-  // HEAVY (Race)
-  const heavyModels = [
-    "deepseek/deepseek-r1-0528:free",
-    "meta-llama/llama-3.3-70b-instruct:free",
-    "nousresearch/hermes-3-llama-3.1-405b:free",
-    "qwen/qwen3-next-80b-a3b-instruct:free",
-    "openai/gpt-oss-120b:free"
-  ];
-
-  try {
-    const heavy = await Promise.any(
-      heavyModels.map(m => callModel(m, messages, context))
-    );
-    return res.status(200).json(heavy);
-  } catch {}
-
-  return res.status(500).json({
-    reply: "All models failed.",
-    modelUsed: "none"
+// 🧠 Simulated AI Models
+function fastModel(prompt) {
+  return new Promise((resolve, reject) => {
+    setTimeout(() => {
+      resolve("⚡ FAST Response: " + prompt);
+    }, 800);
   });
 }
+
+function balancedModel(prompt) {
+  return new Promise((resolve) => {
+    setTimeout(() => {
+      resolve("⚖ BALANCED Response: " + prompt);
+    }, 1500);
+  });
+}
+
+function heavyModel(prompt) {
+  return new Promise((resolve) => {
+    setTimeout(() => {
+      resolve("🧠 HEAVY Response: " + prompt);
+    }, 2500);
+  });
+}
+
+// 🚀 TRUE Parallel Fallback (Natural Racing)
+app.post("/chat", async (req, res) => {
+  const { message, sessionId } = req.body;
+
+  if (!sessions[sessionId]) {
+    sessions[sessionId] = [];
+  }
+
+  sessions[sessionId].push({
+    id: uuidv4(),
+    role: "user",
+    content: message,
+  });
+
+  try {
+    const response = await Promise.race([
+      fastModel(message),
+      balancedModel(message),
+      heavyModel(message),
+    ]);
+
+    const aiMessage = {
+      id: uuidv4(),
+      role: "assistant",
+      content: response,
+    };
+
+    sessions[sessionId].push(aiMessage);
+
+    res.json({
+      reply: aiMessage,
+      history: sessions[sessionId],
+    });
+  } catch (error) {
+    res.status(500).json({ error: "All models failed." });
+  }
+});
+
+// ❌ Delete single message
+app.post("/delete-message", (req, res) => {
+  const { sessionId, messageId } = req.body;
+
+  sessions[sessionId] = sessions[sessionId].filter(
+    (msg) => msg.id !== messageId
+  );
+
+  res.json({ success: true });
+});
+
+// 🗑 Clear entire chat
+app.post("/clear-chat", (req, res) => {
+  const { sessionId } = req.body;
+  sessions[sessionId] = [];
+  res.json({ success: true });
+});
+
+app.listen(5000, () => {
+  console.log("Server running on port 5000");
+});
+
 
