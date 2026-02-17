@@ -1,64 +1,68 @@
+export const config = {
+  maxDuration: 30, // Vercel setting to allow the function to stay alive during fallbacks
+};
+
 export default async function handler(req, res) {
-  if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
+  if (req.method !== 'POST') return res.status(405).send('Use POST');
 
   const { messages } = await req.json();
   const lastQuery = messages[messages.length - 1].content;
 
-  // 1. DuckDuckGo Search (Quick Context)
-  const searchRes = await fetch(`https://api.duckduckgo.com/?q=${encodeURIComponent(lastQuery)}&format=json&no_html=1`);
-  const searchData = await searchRes.json();
-  const context = searchData.AbstractText || "Honest25 Knowledge Base";
+  // 1. DuckDuckGo Search Context
+  const search = await fetch(`https://api.duckduckgo.com/?q=${encodeURIComponent(lastQuery)}&format=json&no_html=1`);
+  const sData = await search.json();
+  const context = sData.AbstractText || "Online Search Context: " + lastQuery;
 
-  // 2. Ordered fallback stack based on your preferences
+  // 2. Your Organized Model Tiers
   const modelStack = [
-    // --- FAST MODELS ---
-    "stepfun/step-3.5-flash:free",
-    "nvidia/nemotron-nano-9b-v2:free",
-    "google/gemma-3-4b-it:free",
-    "meta-llama/llama-3.2-3b-instruct:free",
-    "qwen/qwen3-4b:free",
-    // --- BALANCED ---
-    "google/gemma-3-12b-it:free",
+    "stepfun/step-3.5-flash:free",           // Tier 1: Fast
+    "nvidia/nemotron-nano-9b-v2:free",      // Tier 1: Fast
+    "google/gemma-3-4b-it:free",            // Tier 1: Fast
+    "google/gemma-3-12b-it:free",           // Tier 2: Balanced
     "mistralai/mistral-small-3.1-24b-instruct:free",
-    "z-ai/glm-4.5-air:free",
-    "upstage/solar-pro-3:free",
-    // --- HEAVY ---
-    "deepseek/deepseek-r1-0528:free",
-    "meta-llama/llama-3.3-70b-instruct:free",
-    "nousresearch/hermes-3-llama-3.1-405b:free"
+    "deepseek/deepseek-r1-0528:free",       // Tier 3: Thinking
+    "meta-llama/llama-3.3-70b-instruct:free"
   ];
 
-  try {
-    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
-        "Content-Type": "application/json",
-        "X-Title": "Honest25-AI"
-      },
-      body: JSON.stringify({
-        "models": modelStack, // OpenRouter handles the hierarchy
-        "route": "fallback",  // This ensures it skips slow models
-        "messages": [
-          { "role": "system", "content": `You are Honest25-AI. Context: ${context}. Be concise and fast.` },
-          ...messages
-        ],
-        "stream": false // Set to false for cleaner fallback handling in this simple setup
-      })
-    });
+  // 3. The "Manual Jump" Logic
+  for (const model of modelStack) {
+    try {
+      // We set a 3-second 'abort' for the FAST models to ensure quick fallback
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 3500); 
 
-    const data = await response.json();
-    
-    if (data.choices && data.choices[0]) {
-      res.status(200).json({ 
-        reply: data.choices[0].message.content,
-        modelUsed: data.model // Shows the user which model took over
+      const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        signal: controller.signal,
+        headers: {
+          "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
+          "Content-Type": "application/json",
+          "X-Title": "Honest25-AI"
+        },
+        body: JSON.stringify({
+          "model": model, 
+          "messages": [
+            { "role": "system", "content": `You are Honest25-AI. Context: ${context}` },
+            ...messages
+          ]
+        })
       });
-    } else {
-      throw new Error("No response from stack");
-    }
 
-  } catch (error) {
-    res.status(500).json({ error: "Honest25-AI: All models busy." });
+      clearTimeout(timeoutId);
+      const data = await response.json();
+
+      if (data.choices && data.choices[0]) {
+        return res.status(200).json({ 
+          reply: data.choices[0].message.content,
+          modelUsed: model 
+        });
+      }
+    } catch (e) {
+      // If the model is slow (3.5s) or fails, the loop moves to the next model immediately
+      console.log(`Fallback triggered: ${model} was too slow.`);
+      continue; 
+    }
   }
+
+  res.status(500).json({ reply: "Honest25-AI is having trouble connecting to all models." });
 }
