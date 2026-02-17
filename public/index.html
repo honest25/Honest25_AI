@@ -7,17 +7,95 @@
 </head>
 <body class="bg-black text-white flex h-screen overflow-hidden">
 
-  <!-- Sidebar -->
-  <div class="w-64 bg-zinc-950 border-r border-zinc-800 flex flex-col">
-    <div class="p-4 border-b border-zinc-800">
-      <button onclick="createNewChat()" 
-        class="w-full bg-blue-600 hover:bg-blue-500 p-2 rounded font-bold">
-        + New Chat
-      </button>
-    </div>
+  <script>
+let chats = JSON.parse(localStorage.getItem("honest25_chats")) || {};
+let currentChatId = null;
+let deleteMode = false;
 
-    <div id="chatList" class="flex-1 overflow-y-auto p-2 space-y-2"></div>
-  </div>
+function saveChats() {
+  localStorage.setItem("honest25_chats", JSON.stringify(chats));
+}
+
+function createNewChat() {
+  const id = Date.now().toString();
+  chats[id] = {
+    title: "New Chat",
+    messages: []
+  };
+  currentChatId = id;
+  saveChats();
+  renderChatList();
+  renderChat();
+}
+
+function toggleDeleteMode() {
+  deleteMode = !deleteMode;
+  renderChatList();
+}
+
+function deleteChat(id) {
+  delete chats[id];
+  if (currentChatId === id) {
+    currentChatId = null;
+    document.getElementById("chatWindow").innerHTML = "";
+  }
+  saveChats();
+  renderChatList();
+}
+
+function renderChatList() {
+  const list = document.getElementById("chatList");
+  list.innerHTML = "";
+
+  Object.keys(chats).forEach(id => {
+    const div = document.createElement("div");
+    div.className = "bg-zinc-900 p-2 rounded flex justify-between items-center hover:bg-zinc-800 cursor-pointer";
+
+    div.innerHTML = `
+      <span onclick="openChat('${id}')">${chats[id].title}</span>
+      ${deleteMode ? `<button onclick="deleteChat('${id}')" class="text-red-500 text-xs">Delete</button>` : ""}
+    `;
+
+    list.appendChild(div);
+  });
+}
+
+function openChat(id) {
+  currentChatId = id;
+  renderChat();
+}
+
+function renderChat() {
+  const chatWindow = document.getElementById("chatWindow");
+  chatWindow.innerHTML = "";
+  if (!currentChatId) return;
+
+  chats[currentChatId].messages.forEach(msg => {
+    const div = document.createElement("div");
+    div.className = msg.role === "user"
+      ? "text-right"
+      : "bg-zinc-900 p-4 rounded";
+
+    div.innerHTML = msg.role === "user"
+      ? `<span class="bg-blue-600 px-3 py-2 rounded inline-block">${msg.content}</span>`
+      : `<b>Honest25:</b><br>${msg.content}`;
+
+    chatWindow.appendChild(div);
+  });
+
+  chatWindow.scrollTop = chatWindow.scrollHeight;
+}
+
+// Auto initialize
+if (Object.keys(chats).length === 0) {
+  createNewChat();
+} else {
+  currentChatId = Object.keys(chats)[0];
+  renderChatList();
+  renderChat();
+}
+</script>
+
 
   <!-- Main Chat -->
   <div class="flex-1 flex flex-col">
