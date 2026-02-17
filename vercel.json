@@ -1,7 +1,10 @@
-fetch('/api/chat', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({
-    messages: [{ role: 'user', content: query }]
-  })
-})
+{
+  "functions": {
+    "api/chat.js": {
+      "maxDuration": 60
+    }
+  },
+  "rewrites": [
+    { "source": "/api/chat", "destination": "/api/chat.js" }
+  ]
+}
